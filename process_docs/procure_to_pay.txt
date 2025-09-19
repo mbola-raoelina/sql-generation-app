@@ -1,0 +1,38 @@
+PROCESS: Procure to Pay (P2P)
+OVERVIEW: This process covers from creating a purchase order to paying an invoice in Oracle Fusion Financials.
+
+STEPS:
+1. Purchase Order Creation
+   - Tables: PO_HEADERS_ALL, PO_LINES_ALL, PO_DISTRIBUTIONS_ALL
+   - Columns: PO_HEADER_ID, PO_NUMBER, VENDOR_ID, ITEM_DESCRIPTION, QUANTITY, UNIT_PRICE
+   - Business Rules: Purchase orders must be approved based on authorization limits
+
+2. Goods Receipt
+   - Tables: RCV_SHIPMENT_HEADERS, RCV_SHIPMENT_LINES
+   - Columns: SHIPMENT_HEADER_ID, RECEIPT_NUM, PO_HEADER_ID, PO_LINE_ID, QUANTITY_RECEIVED
+   - Business Rules: Quantities received must match purchase order quantities
+
+3. Invoice Entry
+   - Tables: AP_INVOICES_ALL, AP_INVOICE_DISTRIBUTIONS_ALL
+   - Columns: INVOICE_ID, INVOICE_NUM, INVOICE_AMOUNT, INVOICE_DATE, PO_HEADER_ID
+   - Business Rules: Invoices must match purchase orders and receipts
+
+4. Invoice Validation and Approval
+   - Tables: AP_INVOICES_ALL, AP_HOLDS_ALL
+   - Columns: INVOICE_ID, HOLD_ID, HOLD_REASON, RELEASE_REASON
+   - Business Rules: Invoices are placed on hold for mismatches or missing information
+
+5. Payment Processing
+   - Tables: AP_PAYMENT_SCHEDULES_ALL, AP_PAYMENTS_ALL, AP_CHECKS_ALL
+   - Columns: INVOICE_ID, PAYMENT_ID, CHECK_ID, PAYMENT_AMOUNT, PAYMENT_DATE
+   - Business Rules: Payments are made only for approved invoices with valid payment terms
+
+KEY RELATIONSHIPS:
+- PO_HEADERS_ALL.PO_HEADER_ID → AP_INVOICES_ALL.PO_HEADER_ID
+- AP_INVOICES_ALL.INVOICE_ID → AP_INVOICE_DISTRIBUTIONS_ALL.INVOICE_ID
+- AP_INVOICES_ALL.INVOICE_ID → AP_PAYMENT_SCHEDULES_ALL.INVOICE_ID
+
+COMMON QUERIES:
+- Find invoices without matching purchase orders
+- Identify overdue payments
+- Track purchase order receipt matching status

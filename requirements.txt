@@ -1,0 +1,27 @@
+# Core dependencies
+streamlit>=1.28.0
+openai>=1.0.0
+sentence-transformers>=2.2.0
+chromadb>=0.4.0
+numpy>=1.24.0
+pandas>=2.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Pinecone for cloud vector storage
+pinecone-client>=3.0.0
+
+# Excel generation
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+
+# SOAP/XML processing
+zeep>=4.2.0
+lxml>=4.9.0
+
+# Selenium for fallback (optional)
+selenium>=4.15.0
+
+# Additional utilities
+urllib3>=2.0.0
+beautifulsoup4>=4.12.0

@@ -1,0 +1,38 @@
+PROCESS: Order to Cash (O2C)
+OVERVIEW: This process covers from customer order creation to cash receipt in Oracle Fusion Financials.
+
+STEPS:
+1. Order Management
+   - Tables: OE_ORDER_HEADERS_ALL, OE_ORDER_LINES_ALL
+   - Columns: HEADER_ID, ORDER_NUMBER, ORDERED_DATE, CUSTOMER_ID, FLOW_STATUS_CODE
+   - Business Rules: Orders must be validated for customer credit limits
+
+2. Shipping Execution
+   - Tables: WSH_DELIVERY_DETAILS, WSH_NEW_DELIVERIES
+   - Columns: DELIVERY_DETAIL_ID, DELIVERY_ID, RELEASED_STATUS, SHIPPED_QUANTITY
+   - Business Rules: Shipments must be confirmed before invoicing
+
+3. Invoice Generation
+   - Tables: RA_CUSTOMER_TRX_ALL, RA_CUSTOMER_TRX_LINES_ALL
+   - Columns: CUSTOMER_TRX_ID, TRX_NUMBER, TRX_DATE, AMOUNT_DUE_ORIGINAL
+   - Business Rules: Invoices are generated based on shipped quantities
+
+4. Receivables Management
+   - Tables: AR_PAYMENT_SCHEDULES_ALL, AR_RECEIVABLE_APPLICATIONS_ALL
+   - Columns: PAYMENT_SCHEDULE_ID, CUSTOMER_TRX_ID, AMOUNT_DUE_REMAINING, STATUS
+   - Business Rules: Payments are applied to oldest invoices first
+
+5. Cash Application
+   - Tables: AR_CASH_RECEIPTS_ALL, AR_RECEIVABLE_APPLICATIONS_ALL
+   - Columns: CASH_RECEIPT_ID, RECEIPT_NUMBER, AMOUNT, APPLIED_AMOUNT
+   - Business Rules: Unapplied receipts require manual intervention
+
+KEY RELATIONSHIPS:
+- OE_ORDER_HEADERS_ALL.HEADER_ID → OE_ORDER_LINES_ALL.HEADER_ID
+- OE_ORDER_LINES_ALL.LINE_ID → WSH_DELIVERY_DETAILS.SOURCE_LINE_ID
+- RA_CUSTOMER_TRX_ALL.CUSTOMER_TRX_ID → AR_PAYMENT_SCHEDULES_ALL.CUSTOMER_TRX_ID
+
+COMMON QUERIES:
+- Find orders with pending shipments
+- Identify overdue customer payments
+- Track invoice-to-payment application status

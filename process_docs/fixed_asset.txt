@@ -1,0 +1,39 @@
+PROCESS: Fixed Assets Management
+OVERVIEW: This process covers asset acquisition, depreciation, and retirement in Oracle Fusion Financials.
+
+STEPS:
+1. Asset Acquisition
+   - Tables: FA_ADDITIONS_B, FA_CATEGORIES_B, FA_BOOKS
+   - Columns: ASSET_ID, TAG_NUMBER, DESCRIPTION, DATE_PLACED_IN_SERVICE, COST
+   - Business Rules: Assets must be categorized correctly for proper depreciation
+
+2. Depreciation Processing
+   - Tables: FA_DEPRN_DETAIL, FA_DEPRN_SUMMARY, FA_DEPRN_PERIODS
+   - Columns: ASSET_ID, BOOK_TYPE_CODE, PERIOD_COUNTER, DEPRN_AMOUNT
+   - Business Rules: Depreciation is calculated based on method and life
+
+3. Asset Transfers
+   - Tables: FA_TRANSACTION_HEADERS, FA_LOCATIONS
+   - Columns: TRANSACTION_HEADER_ID, ASSET_ID, TRANSACTION_TYPE_CODE, TRANSACTION_DATE
+   - Business Rules: Asset transfers require approval and documentation
+
+4. Asset Retirement
+   - Tables: FA_RETIREMENTS, FA_TRANSACTION_HEADERS
+   - Columns: RETIREMENT_ID, ASSET_ID, RETIREMENT_DATE, RETIREMENT_TYPE_CODE
+   - Business Rules: Retired assets must be removed from depreciation pools
+
+5. Reporting
+   - Tables: FA_BOOKS, FA_DEPRN_SUMMARY, FA_ADDITIONS_B
+   - Columns: ASSET_ID, DATE_EFFECTIVE, DATE_INEFFECTIVE, COST, DEPRN_RESERVE
+   - Business Rules: Asset reports must reconcile to general ledger balances
+
+KEY RELATIONSHIPS:
+- FA_ADDITIONS_B.ASSET_ID → FA_BOOKS.ASSET_ID
+- FA_BOOKS.ASSET_ID → FA_DEPRN_DETAIL.ASSET_ID
+- FA_TRANSACTION_HEADERS.TRANSACTION_HEADER_ID → FA_TRANSACTION_HEADERS.PARENT_HEADER_ID
+
+COMMON QUERIES:
+- Find assets due for depreciation
+- Identify fully depreciated assets
+- Track asset transfer history
+- Report on asset net book value

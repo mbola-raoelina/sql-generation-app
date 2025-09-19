@@ -1,0 +1,39 @@
+PROCESS: General Ledger Accounting
+OVERVIEW: This process covers financial reporting and period close activities in Oracle Fusion Financials.
+
+STEPS:
+1. Journal Entry
+   - Tables: GL_JE_HEADERS, GL_JE_LINES, GL_JE_BATCHES
+   - Columns: JE_HEADER_ID, JE_LINE_NUM, LEDGER_ID, PERIOD_NAME, ACCOUNTED_DR, ACCOUNTED_CR
+   - Business Rules: Journals must balance (debit = credit) before posting
+
+2. Subledger Accounting
+   - Tables: XLA_AE_HEADERS, XLA_AE_LINES, XLA_TRANSACTION_ENTITIES
+   - Columns: AE_HEADER_ID, APPLICATION_ID, ENTITY_ID, ACCOUNTING_DATE
+   - Business Rules: Subledger journal entries must be transferred to GL
+
+3. Period Close
+   - Tables: GL_PERIODS, GL_JE_HEADERS, GL_JE_LINES
+   - Columns: PERIOD_NAME, START_DATE, END_DATE, CLOSING_STATUS
+   - Business Rules: Prior periods must be closed before current period processing
+
+4. Financial Reporting
+   - Tables: GL_BALANCES, GL_CODE_COMBINATIONS, GL_LEDGERS
+   - Columns: PERIOD_NAME, CURRENCY_CODE, ACTUAL_FLAG, PERIOD_NET_DR, PERIOD_NET_CR
+   - Business Rules: Balances must be translated for reporting currencies
+
+5. Reconciliation
+   - Tables: GL_RECONCILIATIONS, GL_RECONCILIATION_ITEMS
+   - Columns: RECONCILIATION_ID, STATUS, RECONCILIATION_DATE
+   - Business Rules: Account reconciliations must be completed before period close
+
+KEY RELATIONSHIPS:
+- GL_JE_HEADERS.JE_HEADER_ID → GL_JE_LINES.JE_HEADER_ID
+- GL_CODE_COMBINATIONS.CODE_COMBINATION_ID → GL_JE_LINES.CODE_COMBINATION_ID
+- GL_CODE_COMBINATIONS.CODE_COMBINATION_ID → GL_BALANCES.CODE_COMBINATION_ID
+
+COMMON QUERIES:
+- Find unposted journal entries
+- Identify unbalanced journals
+- Track period close status
+- Report on account balances
