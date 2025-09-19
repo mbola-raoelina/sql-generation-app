@@ -21,18 +21,19 @@ def get_pinecone_index():
     
     if _pinecone_index_cache is None:
         try:
-            # Load configuration
-            with open("pinecone_config.json", "r") as f:
-                config = json.load(f)
+            # Load configuration from environment variables
+            api_key = os.getenv("PINECONE_API_KEY")
+            environment = os.getenv("PINECONE_ENVIRONMENT")
+            index_name = os.getenv("PINECONE_INDEX_NAME")
             
-            # Initialize Pinecone
-            pinecone.init(
-                api_key=config["pinecone_api_key"],
-                environment=config["pinecone_environment"]
-            )
+            if not all([api_key, environment, index_name]):
+                raise ValueError("Missing Pinecone environment variables: PINECONE_API_KEY, PINECONE_ENVIRONMENT, PINECONE_INDEX_NAME")
+            
+            # Initialize Pinecone client
+            pc = pinecone.Pinecone(api_key=api_key)
             
             # Get index
-            _pinecone_index_cache = pinecone.Index(config["pinecone_index_name"])
+            _pinecone_index_cache = pc.Index(index_name)
             logger.info("Pinecone index connected and cached")
             
         except Exception as e:
@@ -85,23 +86,22 @@ def retrieve_docs_semantic_pinecone(user_query: str, k: int = 10) -> Dict[str, A
             include_metadata=True
         )
         
-        # Extract documents and metadata
-        documents = []
-        metadatas = []
-        distances = []
+        # Extract documents and metadata in ChromaDB-compatible format
+        docs = []
         
         for match in search_results.matches:
             if match.metadata and "document" in match.metadata:
-                documents.append(match.metadata["document"])
-                metadatas.append(match.metadata)
-                distances.append(match.score)
+                # Create ChromaDB-compatible document format
+                doc = {
+                    "text": match.metadata["document"],
+                    "meta": match.metadata
+                }
+                docs.append(doc)
         
-        logger.info(f"Retrieved {len(documents)} documents from Pinecone")
+        logger.info(f"Retrieved {len(docs)} documents from Pinecone")
         
         return {
-            "docs": documents,
-            "metadatas": metadatas,
-            "distances": distances,
+            "docs": docs,
             "success": True
         }
         
