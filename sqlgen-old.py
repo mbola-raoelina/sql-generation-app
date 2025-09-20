@@ -57,9 +57,9 @@ logger = logging.getLogger(__name__)
 CHROMA_PERSIST_DIR = "./chroma_db"
 CHROMA_COLLECTION_NAME = "schema_docs"
 EMBED_MODEL_NAME = "thenlper/gte-base"
-RETRIEVE_K = 150  # Increased for Pinecone mode to compensate for lack of metadata filtering
+RETRIEVE_K = 18
 OLLAMA_API_URL = "http://localhost:11434/api/chat"
-OLLAMA_TIMEOUT = 120  # 2 minutes for faster fallback
+OLLAMA_TIMEOUT = 300  # 5 minutes for complex queries
 
 # OpenAI configuration
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -794,31 +794,12 @@ def retrieve_docs_semantic(user_query: str, k: int = RETRIEVE_K) -> Dict[str, An
             from sqlgen_pinecone import retrieve_docs_semantic_pinecone
             return retrieve_docs_semantic_pinecone(user_query, k)
         except ImportError:
-            logger.error("Pinecone integration not available in production mode - cannot fallback to ChromaDB")
-            return {
-                "docs": [],
-                "success": False,
-                "error": "Pinecone integration not available in production mode"
-            }
+            logger.warning("Pinecone integration not available, falling back to ChromaDB")
         except Exception as e:
-            logger.error(f"Pinecone retrieval failed in production mode: {e}")
-            return {
-                "docs": [],
-                "success": False,
-                "error": f"Pinecone retrieval failed: {e}"
-            }
+            logger.error(f"Pinecone retrieval failed: {e}, falling back to ChromaDB")
     
     # Local development mode - use ChromaDB
     logger.info("Using ChromaDB for vector storage (local development mode)")
-    
-    # CRITICAL: Double-check we're actually in local development
-    if os.getenv("PINECONE_API_KEY"):
-        logger.error("CRITICAL ERROR: PINECONE_API_KEY is set but Pinecone failed - cannot fallback to ChromaDB in production")
-        return {
-            "docs": [],
-            "success": False,
-            "error": "Production mode requires Pinecone - ChromaDB fallback not available"
-        }
     
     # 1. Get primary table candidates based on query terms
     primary_candidates = get_primary_table_candidates(user_query)
@@ -948,14 +929,9 @@ def summarize_relevant_tables(docs: List[Dict[str,Any]], original_query: str = "
     
     # Get ChromaDB collection for semantic column search
     try:
-        # Safety check: Only use ChromaDB in local development
-        if os.getenv("PINECONE_API_KEY"):
-            logger.warning("Pinecone mode detected - skipping ChromaDB column retrieval")
-            collection = None
-        else:
-            chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-            collection = chroma_client.get_collection(name=CHROMA_COLLECTION_NAME)
-            logger.info("Successfully connected to ChromaDB for column retrieval")
+        chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+        collection = chroma_client.get_collection(name=CHROMA_COLLECTION_NAME)
+        logger.info("Successfully connected to ChromaDB for column retrieval")
     except Exception as e:
         logger.warning(f"Could not access ChromaDB collection: {e}")
         collection = None
@@ -1095,60 +1071,17 @@ def summarize_relevant_tables(docs: List[Dict[str,Any]], original_query: str = "
                 tables[table_name]["columns"] = sorted(list(set(tables[table_name]["columns"])))
                 
                 # If we still don't have enough columns, get a few more essential ones
-                
-            except Exception as e:
-                logger.warning(f"Could not retrieve relevant columns for table {table_name}: {e}")
-    
-    elif os.getenv("PINECONE_API_KEY") and original_query:
-        # PINECONE MODE: Use targeted queries like ChromaDB for comprehensive column coverage
-        logger.info("Pinecone mode: Using targeted column queries for comprehensive coverage")
-        for table_name in list(tables.keys()):
-            try:
-                # Import Pinecone retrieval function
-                from sqlgen_pinecone import retrieve_docs_semantic_pinecone
-                
-                # Query Pinecone for semantically relevant columns of this specific table
-                # Use the original query + table context for better column relevance (same as ChromaDB)
-                column_query = f"{original_query} columns in table {table_name}"
-                column_results = retrieve_docs_semantic_pinecone(column_query, k=200)  # Same as ChromaDB
-                
-                if column_results.get("success") and column_results.get("docs"):
-                    for d in column_results["docs"]:
-                        doc_text = d.get("text", "")
-                        meta = d.get("meta", {})
-                        
-                        # Check if this document is about the current table and is a column document
-                        if (meta.get("table", "").upper() == table_name.upper() and 
-                            meta.get("doc_type") == "column" and 
-                            "COLUMN:" in doc_text):
-                            
-                            # Extract column name from the document
-                            lines = doc_text.split('\n')
-                            for line in lines:
-                                if line.strip().startswith("COLUMN:"):
-                                    col_name = line.split("COLUMN:")[1].strip()
-                                    if col_name and not is_generic_column(col_name):
-                                        tables[table_name]["columns"].append(col_name)
-                                        tables[table_name]["comments"].append(doc_text)
-                                        break
-                
-                # Remove duplicates and sort
-                tables[table_name]["columns"] = sorted(list(set(tables[table_name]["columns"])))
-                logger.info(f"Pinecone mode: Found {len(tables[table_name]['columns'])} columns for table {table_name}")
-                
-                # If we still don't have enough columns, get essential ones (same as ChromaDB)
                 if len(tables[table_name]["columns"]) < 5:
                     essential_columns_query = f"primary key foreign key essential columns {table_name}"
-                    essential_results = retrieve_docs_semantic_pinecone(essential_columns_query, k=100)
+                    essential_results = collection.query(
+                        query_texts=[essential_columns_query],
+                        n_results=100,
+                        where={"$and": [{"table": table_name.upper()}, {"doc_type": "column"}]}
+                    )
                     
-                    if essential_results.get("success") and essential_results.get("docs"):
-                        for d in essential_results["docs"]:
-                            doc_text = d.get("text", "")
-                            meta = d.get("meta", {})
-                            
-                            if (meta.get("table", "").upper() == table_name.upper() and 
-                                meta.get("doc_type") == "column" and 
-                                "COLUMN:" in doc_text):
+                    if essential_results and essential_results['documents']:
+                        for doc_text in essential_results['documents'][0]:
+                            if "COLUMN:" in doc_text and f"TABLE: {table_name.upper()}" in doc_text:
                                 lines = doc_text.split('\n')
                                 for line in lines:
                                     if line.strip().startswith("COLUMN:"):
@@ -1163,146 +1096,26 @@ def summarize_relevant_tables(docs: List[Dict[str,Any]], original_query: str = "
                 tables[table_name]["columns"] = sorted(list(set(tables[table_name]["columns"])))
                 
             except Exception as e:
-                logger.warning(f"Pinecone mode: Error retrieving columns for table {table_name}: {e}")
+                logger.warning(f"Could not retrieve relevant columns for table {table_name}: {e}")
     
-    # FK-AWARE TABLE INCLUSION for Pinecone mode
-    if os.getenv("PINECONE_API_KEY"):
-        tables = include_referenced_tables_from_fks_pinecone(tables, original_query)
+    # Calculate enhanced priority scores for each table and sort by priority
+    for table_name, table_data in tables.items():
+        table_data["priority_score"] = calculate_table_priority_score(table_name, table_data, original_query)
+        logger.info(f"Table {table_name}: {len(table_data['columns'])} columns, priority score: {table_data['priority_score']:.1f}")
     
-    # Final cleanup: Remove duplicates and sort for all tables
-    for table_name in list(tables.keys()):
-        tables[table_name]["columns"] = sorted(list(set(tables[table_name]["columns"])))
-        logger.info(f"Final table {table_name}: {len(tables[table_name]['columns'])} columns")
+    # Add JOIN suggestions for missing columns
+    if collection and original_query:
+        add_join_suggestions(tables, collection, original_query)
+    
+    # FK-AWARE TABLE INCLUSION: Automatically include referenced tables from FK relationships
+    if collection:
+        tables = include_referenced_tables_from_fks(tables, collection, original_query)
     
     logger.info(f"Found {len(tables)} relevant tables after filtering")
     for table_name, table_data in tables.items():
         logger.debug(f"Table: {table_name}, Priority: {table_data.get('priority_score', 0):.1f}, Columns: {len(table_data['columns'])}, Comments: {len(table_data['comments'])}")
     
     return tables
-
-def include_referenced_tables_from_fks_pinecone(tables: Dict[str, Dict], original_query: str = "") -> Dict[str, Dict]:
-    """
-    Pinecone-compatible version of FK relationship inclusion.
-    Uses Pinecone queries to find FK relationships and include missing referenced tables.
-    """
-    logger.info("Analyzing FK relationships to include missing referenced tables (Pinecone mode)")
-    
-    try:
-        from sqlgen_pinecone import retrieve_docs_semantic_pinecone
-        
-        # Collect all referenced tables from FK relationships
-        referenced_tables = set()
-        
-        for table_name, table_data in tables.items():
-            foreign_keys = table_data.get("foreign_keys", [])
-            for fk in foreign_keys:
-                referenced_table = fk.get("references_table")
-                if referenced_table and referenced_table not in tables:
-                    referenced_tables.add(referenced_table)
-                    logger.info(f"Found FK reference to missing table: {table_name} -> {referenced_table}")
-        
-        # If no referenced tables are missing, return early
-        if not referenced_tables:
-            logger.info("All FK-referenced tables are already included")
-            return tables
-        
-        logger.info(f"Including {len(referenced_tables)} missing referenced tables: {list(referenced_tables)}")
-        
-        # Fetch the missing referenced tables from Pinecone
-        for referenced_table in referenced_tables:
-            try:
-                # Query Pinecone for table document
-                table_query = f"table {referenced_table} primary key foreign key"
-                table_results = retrieve_docs_semantic_pinecone(table_query, k=50)
-                
-                if not table_results.get("success") or not table_results.get("docs"):
-                    logger.warning(f"Referenced table {referenced_table} not found in Pinecone")
-                    continue
-                
-                # Find the table document
-                table_doc = None
-                table_meta = None
-                for d in table_results["docs"]:
-                    meta = d.get("meta", {})
-                    if (meta.get("table", "").upper() == referenced_table.upper() and 
-                        meta.get("doc_type") == "table"):
-                        table_doc = d.get("text", "")
-                        table_meta = meta
-                        break
-                
-                if not table_doc:
-                    logger.warning(f"No table document found for {referenced_table}")
-                    continue
-                
-                # Check if this is a non-transactional table (skip if so)
-                full_comment = get_full_table_comment(referenced_table, table_doc)
-                if is_non_transactional_table(full_comment):
-                    logger.info(f"Skipping non-transactional referenced table: {referenced_table}")
-                    continue
-                
-                # Extract table information
-                primary_key = extract_primary_key([table_doc])
-                foreign_keys = extract_foreign_keys([table_doc])
-                
-                # Extract columns from table document
-                columns = set()
-                for line in table_doc.split('\n'):
-                    if line.strip().upper().startswith('COLUMNS:'):
-                        cols = line.split(':', 1)[1].strip()
-                        columns = {c.strip() for c in cols.split(',') if c.strip() and not is_generic_column(c.strip())}
-                        break
-                
-                # Get additional column information from Pinecone
-                try:
-                    column_query = f"essential columns {referenced_table}"
-                    column_results = retrieve_docs_semantic_pinecone(column_query, k=100)
-                    
-                    if column_results.get("success") and column_results.get("docs"):
-                        for d in column_results["docs"]:
-                            doc_text = d.get("text", "")
-                            meta = d.get("meta", {})
-                            
-                            if (meta.get("table", "").upper() == referenced_table.upper() and 
-                                meta.get("doc_type") == "column" and 
-                                "COLUMN:" in doc_text):
-                                lines = doc_text.split('\n')
-                                for line in lines:
-                                    if line.strip().startswith("COLUMN:"):
-                                        col_name = line.split("COLUMN:")[1].strip()
-                                        if col_name and not is_generic_column(col_name):
-                                            columns.add(col_name)
-                except Exception as e:
-                    logger.warning(f"Could not retrieve additional columns for referenced table {referenced_table}: {e}")
-                
-                # Create table data structure
-                table_data = {
-                    "columns": sorted(list(columns)),
-                    "comments": [table_doc],
-                    "doc_ids": [table_meta.get("doc_id", "")],
-                    "table_comment": table_meta.get("table_comment", ""),
-                    "primary_key": primary_key,
-                    "foreign_keys": foreign_keys,
-                    "priority_score": 0.0  # Will be calculated later
-                }
-                
-                # Calculate priority score for the referenced table
-                table_info = {"comments": [table_doc], "columns": list(columns)}
-                table_data["priority_score"] = calculate_table_priority_score(referenced_table, table_info, original_query)
-                
-                # Add to tables dictionary
-                tables[referenced_table] = table_data
-                logger.info(f"Added referenced table {referenced_table} with {len(columns)} columns, priority: {table_data['priority_score']:.1f}")
-                
-            except Exception as e:
-                logger.warning(f"Could not include referenced table {referenced_table}: {e}")
-                continue
-        
-        logger.info(f"FK-aware table inclusion complete. Total tables: {len(tables)}")
-        return tables
-        
-    except Exception as e:
-        logger.warning(f"FK-aware table inclusion failed: {e}")
-        return tables
 
 def include_referenced_tables_from_fks(tables: Dict[str, Dict], collection, original_query: str = "") -> Dict[str, Dict]:
     """
@@ -2087,43 +1900,7 @@ def get_process_context_for_query(user_query: str) -> str:
         _process_context_cache[query_key] = ""
         return ""
 
-def filter_process_context_for_existing_tables(process_context: str, available_tables: List[str]) -> str:
-    """
-    Filter process context to only mention tables that actually exist in our schema.
-    This prevents LLM hallucination of non-existent tables.
-    """
-    if not process_context or not available_tables:
-        return ""
-    
-    # Convert to uppercase for comparison
-    available_tables_upper = [t.upper() for t in available_tables]
-    
-    lines = []
-    for line in process_context.split('\n'):
-        # Check if line mentions tables
-        if '- Tables:' in line or 'Tables:' in line:
-            # Split the line and filter out non-existent tables
-            parts = line.split(':')
-            if len(parts) >= 2:
-                table_list = parts[1].strip()
-                # Filter out non-existent tables
-                existing_tables = []
-                for table in table_list.split(','):
-                    table = table.strip().upper()
-                    if table in available_tables_upper:
-                        existing_tables.append(table)
-                
-                # Only include line if it has existing tables
-                if existing_tables:
-                    filtered_line = parts[0] + ': ' + ', '.join(existing_tables)
-                    lines.append(filtered_line)
-        else:
-            # Include non-table lines as-is
-            lines.append(line)
-    
-    return '\n'.join(lines)
-
-def build_semantic_prompt(user_query: str, tables_summary: Dict[str, Any], available_tables: List[str] = None) -> str:
+def build_semantic_prompt(user_query: str, tables_summary: Dict[str, Any]) -> str:
     """
     Build a simple, focused prompt to avoid overwhelming the LLM.
     """
@@ -2136,20 +1913,10 @@ def build_semantic_prompt(user_query: str, tables_summary: Dict[str, Any], avail
     
     lines = ["Schema with column-to-table mapping:"]
     
-    # TEMPORARILY DISABLED: Process context causes LLM hallucination
-    # Get process context for better business understanding (filtered to only existing tables)
-    # process_context = get_process_context_for_query(user_query)
-    # if process_context and available_tables:
-    #     # Filter process context to only mention tables that actually exist
-    #     filtered_context = filter_process_context_for_existing_tables(process_context, available_tables)
-    #     if filtered_context:
-    #         lines.append(f"\n{filtered_context}")
-    #         lines.append("")  # Add spacing
-    
-    # CRITICAL: Add available tables list to prevent hallucination
-    if available_tables:
-        lines.append(f"AVAILABLE_TABLES: {', '.join(available_tables)}")
-        lines.append("CRITICAL: ONLY use tables from the AVAILABLE_TABLES list above - NEVER invent table names!")
+    # Get process context for better business understanding
+    process_context = get_process_context_for_query(user_query)
+    if process_context:
+        lines.append(f"\n{process_context}")
         lines.append("")  # Add spacing
     
     # Show top 3 tables with explicit column mapping
@@ -2198,21 +1965,16 @@ def build_semantic_prompt(user_query: str, tables_summary: Dict[str, Any], avail
         lines.append("- Use column descriptions to understand business logic and relationships")
         lines.append("- For aggregations, use appropriate SQL functions based on query intent")
         lines.append("- Analyze column descriptions to understand how to calculate derived values")
-        lines.append("- CRITICAL: Only use tables from the AVAILABLE_TABLES list - NEVER invent table names!")
         lines.append("- CRITICAL: Only use columns that are explicitly listed in ALL_AVAILABLE_COLUMNS above")
         lines.append("- If you need a column that's not listed, check if there's a semantically similar column")
         lines.append("- Do NOT assume column names - verify they exist in the schema provided")
         lines.append("- ALWAYS generate valid SQL - NEVER return error messages about missing columns")
         lines.append("- If a column doesn't exist, find the semantically equivalent column from ALL_AVAILABLE_COLUMNS")
         lines.append("- NEVER invent or hallucinate column names - only use what's provided in ALL_AVAILABLE_COLUMNS")
-        lines.append("- NEVER invent or hallucinate table names - only use what's in AVAILABLE_TABLES")
         lines.append("- If you need a specific type of column, search through ALL_AVAILABLE_COLUMNS to find the exact name")
         lines.append("- Double-check every column name against the ALL_AVAILABLE_COLUMNS list before using it")
-        lines.append("- Double-check every table name against the AVAILABLE_TABLES list before using it")
         lines.append("- CRITICAL: Define ALL table aliases in FROM and JOIN clauses before using them")
         lines.append("- NEVER use undefined table aliases - always define them first in FROM/JOIN clauses")
-        lines.append("- ALWAYS use the SAME alias you defined in FROM/JOIN - don't mix up aliases!")
-        lines.append("- Example: If you define 'FROM AP_PAYMENT_SCHEDULES_ALL a', then use 'a.COLUMN_NAME', not 'b.COLUMN_NAME'")
         lines.append("- Use the table names and foreign key relationships shown above to create proper JOINs")
     
     lines.append(f"\nQuery: {user_query}")
@@ -2467,18 +2229,10 @@ def extract_sql_from_response(response: str, schema_columns: Dict[str, List[str]
     
     result = '\n'.join(sql_lines).strip()
     
-    # Enhanced validation: Check for corrupted/malformed SQL
+    # If no SQL found, return error message instead of original response
     if not result or not result.upper().startswith('SELECT'):
         logger.warning(f"No valid SQL found in LLM response. Response preview: {response[:200]}...")
         return "-- ERROR: No valid SQL found in LLM response"
-    
-    # Check for corrupted SQL (contains random characters, incomplete statements)
-    if ('=' * 10 in result or  # Multiple equal signs
-        'Latest =' in result or  # Incomplete column aliases
-        result.count('=') > 20 or  # Too many equal signs (likely corrupted)
-        len(result.split('\n')) < 3):  # Too short to be complete SQL
-        logger.warning(f"Detected corrupted SQL response: {result[:100]}...")
-        return "-- ERROR: LLM generated corrupted SQL - retry needed"
     
     logger.info(f"Successfully extracted SQL using fallback method: {result[:100]}...")
     # Apply dynamic corrections if schema columns are provided
@@ -3117,24 +2871,14 @@ def validate_sql(sql_text: str) -> Dict[str,Any]:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def generate_sql_from_text_semantic(user_query: str, chroma_k: int = 50, model: str = None) -> Dict[str,Any]:
+def generate_sql_from_text_semantic(user_query: str, chroma_k: int = RETRIEVE_K, model: str = "sqlcoder:15b") -> Dict[str,Any]:
     """
     Enhanced SQL generation that focuses on semantic meaning from comments.
     """
     logger.info(f"Starting semantic SQL generation for query: {user_query}")
     
-    # Auto-select best model if none specified
-    if model is None:
-        if OPENAI_API_KEY:
-            model = "gpt-4o-mini"  # Fast and reliable
-            logger.info("Auto-selected OpenAI gpt-4o-mini for optimal performance")
-        else:
-            model = "llama3:8b"  # Fastest Ollama model
-            logger.warning("Auto-selected Ollama llama3:8b (OpenAI not available - may be slower)")
-    
-    # 1) Retrieve documents with semantic focus - increase k for better column coverage
-    effective_k = max(chroma_k, 100)  # Ensure minimum 100 documents for column coverage in Pinecone mode
-    r = retrieve_docs_semantic(user_query, k=effective_k)
+    # 1) Retrieve documents with semantic focus
+    r = retrieve_docs_semantic(user_query, k=chroma_k)
     docs = r["docs"]
     if not docs:
         logger.error("No semantically relevant documents retrieved from Chroma")
@@ -3144,9 +2888,7 @@ def generate_sql_from_text_semantic(user_query: str, chroma_k: int = 50, model: 
     table_summary = summarize_relevant_tables(docs, user_query)
 
     # 3) Build semantic-focused prompt
-    # Add available tables list to prevent hallucination
-    available_tables = list(table_summary.keys())
-    prompt = build_semantic_prompt(user_query, table_summary, available_tables)
+    prompt = build_semantic_prompt(user_query, table_summary)
 
     # 4) Call LLM (OpenAI or Ollama) with fallback mechanism
     if model.startswith("gpt-") or model.startswith("o1-"):
@@ -3190,7 +2932,7 @@ def generate_sql_from_text_semantic(user_query: str, chroma_k: int = 50, model: 
             fallback_models = ["gpt-4o-mini", "gpt-3.5-turbo"]
         else:
             # Ollama fallbacks
-            fallback_models = ["llama3:8b", "sqlcoder:7b", "mistral:instruct"]
+            fallback_models = ["sqlcoder:7b", "llama3:8b", "mistral:instruct"]
         
         for fallback_model in fallback_models:
             try:
@@ -3598,7 +3340,7 @@ def format_sql_for_bi_publisher(sql: str) -> str:
     
     return '\n'.join(formatted_lines)
 
-def generate_sql_from_text(user_query: str, chroma_k: int = RETRIEVE_K, model: str = None) -> Dict[str,Any]:
+def generate_sql_from_text(user_query: str, chroma_k: int = RETRIEVE_K, model: str = "sqlcoder:15b") -> Dict[str,Any]:
     """
     Main function with option to use semantic approach
     """
@@ -3623,7 +3365,7 @@ if __name__ == "__main__":
     
     p = argparse.ArgumentParser()
     p.add_argument("--query", required=True)
-    p.add_argument("--model", default="gpt-4o-mini" if openai_client else "llama3:8b")
+    p.add_argument("--model", default="gpt-4o-mini" if openai_client else "sqlcoder:15b")
     p.add_argument("--method", choices=["semantic", "langchain"], default="semantic", 
                    help="Choose between semantic approach or LangChain chains approach")
     args = p.parse_args()
