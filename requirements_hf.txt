@@ -1,0 +1,31 @@
+# Hugging Face Spaces Requirements
+# Core dependencies for the SQL generation app
+
+# Web framework
+gradio==4.44.0
+
+# SQL generation dependencies
+sentence-transformers==2.7.0
+scikit-learn==1.4.0
+numpy==1.24.3
+requests==2.31.0
+
+# OpenAI integration
+openai==1.35.0
+python-dotenv==1.0.0
+
+# Pinecone integration
+pinecone-client==3.0.0
+
+# Excel generation
+openpyxl==3.1.2
+pandas==2.1.4
+
+# Optional: LangChain (if using langchain method)
+langchain==0.1.20
+langchain-community==0.0.38
+langchain-openai==0.1.0
+langchain-ollama==0.1.0
+
+# Additional utilities
+coloredlogs==15.0.1
