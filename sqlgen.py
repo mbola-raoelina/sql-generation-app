@@ -13,7 +13,14 @@ from typing import List, Dict, Any, Tuple
 import requests
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-import chromadb
+# Conditional ChromaDB import - only import if not in Pinecone-only mode
+try:
+    import chromadb
+    CHROMADB_AVAILABLE = True
+except ImportError:
+    CHROMADB_AVAILABLE = False
+    print("ChromaDB not available - will use Pinecone mode only")
+
 # Removed SQLGlot dependency - using simple regex patterns for better reliability
 from datetime import datetime
 
@@ -326,6 +333,8 @@ def get_dynamic_skip_validation_list() -> List[str]:
 def get_chroma_client():
     """Get cached ChromaDB client or create it once"""
     global _chroma_client_cache
+    if not CHROMADB_AVAILABLE:
+        raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if _chroma_client_cache is None:
         logger.info(f"Connecting to ChromaDB: {CHROMA_PERSIST_DIR}")
         _chroma_client_cache = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
@@ -335,6 +344,8 @@ def get_chroma_client():
 def get_chroma_collection():
     """Get cached ChromaDB collection or get it once"""
     global _chroma_collection_cache
+    if not CHROMADB_AVAILABLE:
+        raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if _chroma_collection_cache is None:
         client = get_chroma_client()
         logger.info(f"Getting ChromaDB collection: {CHROMA_COLLECTION_NAME}")
@@ -357,6 +368,8 @@ def get_global_embed_model():
 def get_global_chroma_client():
     """Get the global chroma client, initializing if needed"""
     global client
+    if not CHROMADB_AVAILABLE:
+        raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if client is None:
         client = get_chroma_client()
     return client
@@ -364,6 +377,8 @@ def get_global_chroma_client():
 def get_global_chroma_collection():
     """Get the global chroma collection, initializing if needed"""
     global collection
+    if not CHROMADB_AVAILABLE:
+        raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if collection is None:
         collection = get_chroma_collection()
     return collection
@@ -811,6 +826,15 @@ def retrieve_docs_semantic(user_query: str, k: int = RETRIEVE_K) -> Dict[str, An
     # Local development mode - use ChromaDB
     logger.info("Using ChromaDB for vector storage (local development mode)")
     
+    # Check if ChromaDB is available
+    if not CHROMADB_AVAILABLE:
+        logger.error("ChromaDB not available in local development mode")
+        return {
+            "docs": [],
+            "success": False,
+            "error": "ChromaDB not available - install ChromaDB or use Pinecone mode"
+        }
+    
     # CRITICAL: Double-check we're actually in local development
     if os.getenv("PINECONE_API_KEY"):
         logger.error("CRITICAL ERROR: PINECONE_API_KEY is set but Pinecone failed - cannot fallback to ChromaDB in production")
@@ -947,11 +971,13 @@ def summarize_relevant_tables(docs: List[Dict[str,Any]], original_query: str = "
     tables = {}
     
     # Get ChromaDB collection for semantic column search
+    collection = None
     try:
         # Safety check: Only use ChromaDB in local development
         if os.getenv("PINECONE_API_KEY"):
             logger.warning("Pinecone mode detected - skipping ChromaDB column retrieval")
-            collection = None
+        elif not CHROMADB_AVAILABLE:
+            logger.warning("ChromaDB not available - skipping ChromaDB column retrieval")
         else:
             chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
             collection = chroma_client.get_collection(name=CHROMA_COLLECTION_NAME)
