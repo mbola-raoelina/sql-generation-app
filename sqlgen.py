@@ -13,13 +13,8 @@ from typing import List, Dict, Any, Tuple
 import requests
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-# Conditional ChromaDB import - only import if not in Pinecone-only mode
-try:
-    import chromadb
-    CHROMADB_AVAILABLE = True
-except ImportError:
-    CHROMADB_AVAILABLE = False
-    print("ChromaDB not available - will use Pinecone mode only")
+# ChromaDB availability flag - will be set when needed
+CHROMADB_AVAILABLE = False
 
 # Removed SQLGlot dependency - using simple regex patterns for better reliability
 from datetime import datetime
@@ -330,12 +325,28 @@ def get_dynamic_skip_validation_list() -> List[str]:
     logger.debug(f"Generated dynamic skip validation list with {len(skip_validation)} items")
     return skip_validation
 
+def check_chromadb_availability():
+    """Safely check if ChromaDB is available without importing it at module level"""
+    global CHROMADB_AVAILABLE
+    if CHROMADB_AVAILABLE:
+        return True
+    
+    try:
+        import chromadb
+        CHROMADB_AVAILABLE = True
+        return True
+    except (ImportError, RuntimeError) as e:
+        logger.debug(f"ChromaDB not available: {e}")
+        CHROMADB_AVAILABLE = False
+        return False
+
 def get_chroma_client():
     """Get cached ChromaDB client or create it once"""
     global _chroma_client_cache
-    if not CHROMADB_AVAILABLE:
+    if not check_chromadb_availability():
         raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if _chroma_client_cache is None:
+        import chromadb
         logger.info(f"Connecting to ChromaDB: {CHROMA_PERSIST_DIR}")
         _chroma_client_cache = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
         logger.info("ChromaDB client created and cached")
@@ -344,7 +355,7 @@ def get_chroma_client():
 def get_chroma_collection():
     """Get cached ChromaDB collection or get it once"""
     global _chroma_collection_cache
-    if not CHROMADB_AVAILABLE:
+    if not check_chromadb_availability():
         raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if _chroma_collection_cache is None:
         client = get_chroma_client()
@@ -368,7 +379,7 @@ def get_global_embed_model():
 def get_global_chroma_client():
     """Get the global chroma client, initializing if needed"""
     global client
-    if not CHROMADB_AVAILABLE:
+    if not check_chromadb_availability():
         raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if client is None:
         client = get_chroma_client()
@@ -377,7 +388,7 @@ def get_global_chroma_client():
 def get_global_chroma_collection():
     """Get the global chroma collection, initializing if needed"""
     global collection
-    if not CHROMADB_AVAILABLE:
+    if not check_chromadb_availability():
         raise RuntimeError("ChromaDB not available - use Pinecone mode instead")
     if collection is None:
         collection = get_chroma_collection()
@@ -827,7 +838,7 @@ def retrieve_docs_semantic(user_query: str, k: int = RETRIEVE_K) -> Dict[str, An
     logger.info("Using ChromaDB for vector storage (local development mode)")
     
     # Check if ChromaDB is available
-    if not CHROMADB_AVAILABLE:
+    if not check_chromadb_availability():
         logger.error("ChromaDB not available in local development mode")
         return {
             "docs": [],
@@ -976,9 +987,10 @@ def summarize_relevant_tables(docs: List[Dict[str,Any]], original_query: str = "
         # Safety check: Only use ChromaDB in local development
         if os.getenv("PINECONE_API_KEY"):
             logger.warning("Pinecone mode detected - skipping ChromaDB column retrieval")
-        elif not CHROMADB_AVAILABLE:
+        elif not check_chromadb_availability():
             logger.warning("ChromaDB not available - skipping ChromaDB column retrieval")
         else:
+            import chromadb
             chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
             collection = chroma_client.get_collection(name=CHROMA_COLLECTION_NAME)
             logger.info("Successfully connected to ChromaDB for column retrieval")
